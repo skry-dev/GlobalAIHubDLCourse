@@ -1,0 +1,157 @@
+To transfer user passwords and permissions from the active RabbitMQ cluster to the passive one, you’ll need to account for the fact that RabbitMQ’s Management API does not expose user passwords directly (for security reasons). However, since you are dynamically managing users via HashiCorp Vault, you can retrieve and replicate passwords from Vault. Permissions, on the other hand, are accessible via RabbitMQ’s API.
+
+Steps to Transfer User Passwords and Permissions
+
+1. Retrieve User Passwords from Vault
+
+Since RabbitMQ does not expose passwords, you’ll need to query HashiCorp Vault to retrieve the passwords for the users. If you are dynamically generating these passwords via Vault, ensure that your replication script queries Vault for the password of each user.
+
+	•	Use Vault’s API to fetch the credentials for RabbitMQ users:
+
+vault read rabbitmq/creds/my-role
+
+
+
+This will return a JSON payload with the dynamically generated username and password.
+
+2. Retrieve User Permissions
+
+To replicate user permissions, use the RabbitMQ Management API. The API allows you to fetch permissions for each user on a specific vhost.
+
+	•	API call to retrieve permissions for a user:
+
+curl -u user:password http://active-cluster-host:15672/api/permissions
+
+
+
+This will return a list of users and their permissions across all vhosts. You can filter this list for the specific user you’re replicating and then push the permissions to the passive cluster.
+
+3. Replicate User Passwords and Permissions to the Passive Cluster
+
+For each user, you’ll:
+
+	1.	Fetch the user’s password from Vault.
+	2.	Fetch the user’s permissions using RabbitMQ API.
+	3.	Push both the password and permissions to the passive cluster using RabbitMQ’s API.
+
+Here’s an updated Python example incorporating password retrieval from Vault and permission synchronization:
+
+Python Script Example
+
+import requests
+import json
+import time
+import hvac  # HashiCorp Vault API library for Python
+
+# Vault and RabbitMQ credentials
+vault_url = "http://vault-address:8200"
+vault_token = "your_vault_token"
+vault_secret_path = "rabbitmq/creds/my-role"
+active_url = "http://active-cluster-host:15672/api"
+passive_url = "http://passive-cluster-host:15672/api"
+auth = ("admin", "password")  # RabbitMQ credentials
+
+# Initialize Vault client
+vault_client = hvac.Client(url=vault_url, token=vault_token)
+
+# Function to get users from a RabbitMQ cluster
+def get_users(cluster_url):
+    response = requests.get(f"{cluster_url}/users", auth=auth)
+    return response.json()
+
+# Function to get permissions for a user
+def get_permissions(cluster_url, username):
+    response = requests.get(f"{cluster_url}/permissions", auth=auth)
+    permissions = [p for p in response.json() if p['user'] == username]
+    return permissions
+
+# Function to get password for a user from Vault
+def get_password_from_vault():
+    vault_response = vault_client.read(vault_secret_path)
+    return vault_response['data']['password']
+
+# Function to sync user to passive cluster
+def sync_user_to_passive(user, password):
+    user_data = {
+        "password": password,
+        "tags": user['tags']
+    }
+    sync_response = requests.put(
+        f"{passive_url}/users/{user['name']}",
+        auth=auth,
+        headers={"Content-Type": "application/json"},
+        data=json.dumps(user_data)
+    )
+    return sync_response.status_code
+
+# Function to set user permissions in passive cluster
+def set_permissions_in_passive(user, permissions):
+    for perm in permissions:
+        perm_data = {
+            "configure": perm['configure'],
+            "write": perm['write'],
+            "read": perm['read']
+        }
+        response = requests.put(
+            f"{passive_url}/permissions/{perm['vhost']}/{user['name']}",
+            auth=auth,
+            headers={"Content-Type": "application/json"},
+            data=json.dumps(perm_data)
+        )
+        print(f"Set permissions for {user['name']} in vhost {perm['vhost']}: {response.status_code}")
+
+# Function to delete user from passive cluster
+def delete_user_from_passive(username):
+    del_response = requests.delete(f"{passive_url}/users/{username}", auth=auth)
+    return del_response.status_code
+
+# Polling loop to detect changes
+previous_users = get_users(active_url)
+
+while True:
+    current_users = get_users(active_url)
+
+    # Detect new and updated users
+    for user in current_users:
+        existing_user = next((u for u in previous_users if u['name'] == user['name']), None)
+        if not existing_user:  # New user
+            print(f"New user detected: {user['name']}")
+            password = get_password_from_vault()  # Get password from Vault
+            sync_user_to_passive(user, password)  # Sync user to passive cluster
+
+            # Get and sync permissions
+            permissions = get_permissions(active_url, user['name'])
+            set_permissions_in_passive(user, permissions)
+
+        elif existing_user['tags'] != user['tags']:  # Modified user
+            print(f"User modified: {user['name']}")
+            password = get_password_from_vault()  # Get password from Vault
+            sync_user_to_passive(user, password)  # Sync updated user to passive cluster
+
+            # Get and sync permissions
+            permissions = get_permissions(active_url, user['name'])
+            set_permissions_in_passive(user, permissions)
+
+    # Detect deleted users
+    for user in previous_users:
+        if not any(u['name'] == user['name'] for u in current_users):
+            print(f"User deleted: {user['name']}")
+            delete_user_from_passive(user['name'])
+
+    # Update previous user list
+    previous_users = current_users
+
+    # Polling interval (e.g., every minute)
+    time.sleep(60)
+
+Key Points:
+
+	•	Password Retrieval: The script queries HashiCorp Vault to get the password for each user.
+	•	Permissions Synchronization: It fetches the user’s permissions from the active cluster and applies them to the passive cluster.
+	•	Efficient Polling: The script runs periodically to detect changes, minimizing the load on the active and passive clusters.
+
+Deployment and Automation:
+
+You can run this script as a service, ensuring that it runs at regular intervals or based on an event-driven approach (such as through a CI/CD pipeline). This will keep the user base and their permissions in sync between the active and passive RabbitMQ clusters.
+
+Would you like further details on managing secrets in Vault or handling any other aspect of the script?
