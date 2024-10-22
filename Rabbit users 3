@@ -1,0 +1,89 @@
+import requests
+import json
+
+# RabbitMQ API credentials
+active_url = "http://active-cluster-host:15672/api"
+passive_url = "http://passive-cluster-host:15672/api"
+auth = ("admin", "password")  # Replace with your RabbitMQ API credentials
+
+# JSON data containing users and permissions (you can load this from a file if necessary)
+user_data = {
+    "users": [
+        {
+            "name": "denme-fkm",
+            "password_hash": "DKC/zOauAuYoKUWCYPbp4OmiNuQog3o+zVO6XWmbVWdLcaEP",
+            "hashing_algorithm": "rabbit_password_hashing_sha256",
+            "tags": ["administrator"]
+        },
+        {
+            "name": "admin",
+            "password_hash": "another_password_hash",
+            "hashing_algorithm": "rabbit_password_hashing_sha256",
+            "tags": ["administrator"]
+        }
+    ],
+    "permissions": [
+        {
+            "user": "denme-fkm",
+            "vhost": "/eft",
+            "configure": ".*",
+            "write": ".*",
+            "read": ".*"
+        },
+        {
+            "user": "admin",
+            "vhost": "/eft",
+            "configure": ".*",
+            "write": ".*",
+            "read": ".*"
+        }
+    ]
+}
+
+# Function to replicate a user to the passive cluster
+def replicate_user(user):
+    user_data = {
+        "password_hash": user["password_hash"],
+        "hashing_algorithm": user["hashing_algorithm"],
+        "tags": ",".join(user["tags"])  # Join the tags into a comma-separated string
+    }
+    
+    response = requests.put(
+        f"{passive_url}/users/{user['name']}",
+        auth=auth,
+        headers={"Content-Type": "application/json"},
+        data=json.dumps(user_data)
+    )
+    
+    if response.status_code == 204:
+        print(f"User '{user['name']}' replicated successfully.")
+    else:
+        print(f"Failed to replicate user '{user['name']}': {response.text}")
+
+# Function to replicate permissions to the passive cluster
+def replicate_permissions(permission):
+    permission_data = {
+        "configure": permission["configure"],
+        "write": permission["write"],
+        "read": permission["read"]
+    }
+    
+    response = requests.put(
+        f"{passive_url}/permissions/{permission['vhost']}/{permission['user']}",
+        auth=auth,
+        headers={"Content-Type": "application/json"},
+        data=json.dumps(permission_data)
+    )
+    
+    if response.status_code == 204:
+        print(f"Permissions for user '{permission['user']}' in vhost '{permission['vhost']}' replicated successfully.")
+    else:
+        print(f"Failed to replicate permissions for user '{permission['user']}': {response.text}")
+
+# Replicate users
+for user in user_data["users"]:
+    replicate_user(user)
+
+# Replicate permissions
+for permission in user_data["permissions"]:
+    replicate_permissions(permission)
