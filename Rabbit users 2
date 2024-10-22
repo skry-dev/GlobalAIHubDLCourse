@@ -1,0 +1,84 @@
+import requests
+import json
+import time
+
+# RabbitMQ API credentials
+active_url = "http://active-cluster-host:15672/api"
+passive_url = "http://passive-cluster-host:15672/api"
+auth = ("admin", "password")  # RabbitMQ Management API credentials
+
+# Pre-stored user passwords (you can store these securely)
+user_passwords = {
+    "user1": "password1",
+    "user2": "password2",
+    "admin": "admin_password"
+}
+
+# Function to get users from a RabbitMQ cluster
+def get_users(cluster_url):
+    response = requests.get(f"{cluster_url}/users", auth=auth)
+    return response.json()
+
+# Function to get permissions for all users
+def get_permissions(cluster_url):
+    response = requests.get(f"{cluster_url}/permissions", auth=auth)
+    return response.json()
+
+# Function to sync user to passive cluster
+def sync_user_to_passive(user, password):
+    user_data = {
+        "password": password,
+        "tags": user['tags']
+    }
+    sync_response = requests.put(
+        f"{passive_url}/users/{user['name']}",
+        auth=auth,
+        headers={"Content-Type": "application/json"},
+        data=json.dumps(user_data)
+    )
+    return sync_response.status_code
+
+# Function to set permissions in passive cluster
+def set_permissions_in_passive(user, permissions):
+    for perm in permissions:
+        if perm['user'] == user['name']:
+            perm_data = {
+                "configure": perm['configure'],
+                "write": perm['write'],
+                "read": perm['read']
+            }
+            response = requests.put(
+                f"{passive_url}/permissions/{perm['vhost']}/{user['name']}",
+                auth=auth,
+                headers={"Content-Type": "application/json"},
+                data=json.dumps(perm_data)
+            )
+            print(f"Set permissions for {user['name']} in vhost {perm['vhost']}: {response.status_code}")
+
+# Polling loop to detect changes
+previous_users = get_users(active_url)
+previous_permissions = get_permissions(active_url)
+
+while True:
+    current_users = get_users(active_url)
+    current_permissions = get_permissions(active_url)
+
+    # Detect new and updated users
+    for user in current_users:
+        existing_user = next((u for u in previous_users if u['name'] == user['name']), None)
+        if not existing_user:  # New user
+            print(f"New user detected: {user['name']}")
+            password = user_passwords.get(user['name'], "default_password")  # Fetch stored password
+            sync_user_to_passive(user, password)  # Sync user to passive cluster
+
+        elif existing_user['tags'] != user['tags']:  # Modified user
+            print(f"User modified: {user['name']}")
+            password = user_passwords.get(user['name'], "default_password")  # Fetch stored password
+            sync_user_to_passive(user, password)  # Sync updated user to passive cluster
+
+    # Sync permissions
+    for user in current_users:
+        set_permissions_in_passive(user, current_permissions)
+
+    # Polling interval (e.g., every minute)
+    time.sleep(60)
