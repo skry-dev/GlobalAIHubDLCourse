@@ -1,0 +1,47 @@
+import logging
+
+# Set up the logger
+logging.basicConfig(
+    filename='rabbitmq_user_sync.log',  # Log file path
+    filemode='a',  # Append mode, you can use 'w' for overwrite
+    format='%(asctime)s - %(levelname)s - %(message)s',  # Log format
+    level=logging.INFO  # Log level, can be changed to DEBUG for more details
+)
+
+logger = logging.getLogger()
+
+def replicate_users_and_permissions():
+    try:
+        # Assuming the rest of your logic goes here
+        logger.info("Starting user and permission replication process.")
+
+        # Example: Log user replication
+        if user_exists:
+            logger.info(f"User {user['name']} already exists in the passive cluster. Skipping...")
+        else:
+            logger.info(f"Replicating user {user['name']} to the passive cluster.")
+            # replicate logic here
+            logger.info(f"Successfully replicated user {user['name']}.")
+
+        # Example: Log permission replication
+        logger.info(f"Replicating permissions for user {user['name']} on vhost {vhost}.")
+        # permission logic here
+        logger.info(f"Successfully replicated permissions for user {user['name']} on vhost {vhost}.")
+
+        # Example: Log deletions
+        logger.info(f"Deleting unused user {user['name']} from the passive cluster.")
+        # deletion logic here
+        logger.info(f"Successfully deleted user {user['name']}.")
+
+    except Exception as e:
+        logger.error(f"An error occurred during replication: {e}")
+
+# Call the function
+replicate_users_and_permissions()
+
+# Example output logs:
+# 2024-10-23 12:45:30 - INFO - Starting user and permission replication process.
+# 2024-10-23 12:45:31 - INFO - Replicating user john_doe to the passive cluster.
+# 2024-10-23 12:45:32 - INFO - Successfully replicated user john_doe.
+# 2024-10-23 12:45:33 - INFO - Replicating permissions for user john_doe on vhost /
+# 2024-10-23 12:45:34 - INFO - Successfully replicated permissions for user john_doe on vhost /
