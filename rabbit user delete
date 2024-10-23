@@ -1,0 +1,44 @@
+import requests
+import json
+
+# Active and passive RabbitMQ cluster details
+active_url = "https://your-active-cluster-url"
+passive_url = "https://your-passive-cluster-url"
+auth = ("admin", "password")
+
+# URL encoding for vhost
+from urllib.parse import quote
+vhost = "/"
+encoded_vhost = quote(vhost, safe='')
+
+# Fetch users from active cluster
+def get_users_from_cluster(cluster_url):
+    url = f"{cluster_url}/api/users"
+    response = requests.get(url, auth=auth, verify=False)
+    if response.status_code == 200:
+        return [user['name'] for user in response.json()]
+    else:
+        print(f"Failed to fetch users from {cluster_url}, Status Code: {response.status_code}")
+        return []
+
+# Fetch the list of users from both clusters
+active_users = get_users_from_cluster(active_url)
+passive_users = get_users_from_cluster(passive_url)
+
+# Identify users to delete (users present on passive but not on active)
+users_to_delete = set(passive_users) - set(active_users)
+
+# Delete unused users from the passive cluster
+def delete_user(cluster_url, username):
+    url = f"{cluster_url}/api/users/{username}"
+    response = requests.delete(url, auth=auth, verify=False)
+    if response.status_code == 204:
+        print(f"Successfully deleted user: {username}")
+    else:
+        print(f"Failed to delete user {username}, Status Code: {response.status_code}, Response: {response.text}")
+
+# Delete users that are not in the active cluster
+for user in users_to_delete:
+    delete_user(passive_url, user)
+
+print("User synchronization complete.")
