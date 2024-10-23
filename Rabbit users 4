@@ -1,83 +1,109 @@
 import requests
 import json
 
-# RabbitMQ API credentials for both active and passive clusters
-active_url = "http://active-cluster-host:15672/api"
-passive_url = "http://passive-cluster-host:15672/api"
-auth = ("admin", "password")  # Replace with your RabbitMQ API credentials
+# Define the URLs and authentication
+active_url = "http://<active-cluster-url>:<port>/api"
+passive_url = "http://<passive-cluster-url>:<port>/api"
+auth = ("admin", "password")  # Replace with actual credentials
 
-# Function to get users from the active cluster
+# Get the list of users from the active cluster
 def get_users_from_active():
-    response = requests.get(f"{active_url}/users", auth=auth)
+    response = requests.get(f"{active_url}/users", auth=auth, verify=False)
     if response.status_code == 200:
         return response.json()
     else:
-        print(f"Failed to fetch users from active cluster: {response.text}")
+        print(f"Failed to get users from active cluster: {response.status_code}, {response.text}")
         return []
 
-# Function to get permissions for all users from the active cluster
-def get_permissions_from_active():
-    response = requests.get(f"{active_url}/permissions", auth=auth)
-    if response.status_code == 200:
-        return response.json()
-    else:
-        print(f"Failed to fetch permissions from active cluster: {response.text}")
-        return []
+# Check if a vhost exists on the passive cluster
+def check_vhost_exists(vhost):
+    response = requests.get(f"{passive_url}/vhosts/{vhost}", auth=auth, verify=False)
+    return response.status_code == 200
 
-# Function to replicate a user to the passive cluster
+# Check if a user exists on the passive cluster
+def check_user_exists(user):
+    response = requests.get(f"{passive_url}/users/{user['name']}", auth=auth, verify=False)
+    return response.status_code == 200
+
+# Replicate the user to the passive cluster if not already present
 def replicate_user(user):
-    user_data = {
-        "password_hash": user["password_hash"],
-        "hashing_algorithm": user["hashing_algorithm"],
-        "tags": ",".join(user["tags"])  # Join the tags into a comma-separated string
-    }
-    
-    response = requests.put(
-        f"{passive_url}/users/{user['name']}",
-        auth=auth,
-        headers={"Content-Type": "application/json"},
-        data=json.dumps(user_data)
-    )
-    
-    if response.status_code == 204:
-        print(f"User '{user['name']}' replicated successfully.")
+    if check_user_exists(user):
+        print(f"User {user['name']} already exists on passive cluster. Skipping replication.")
+        return False  # Return False to indicate the user already exists
     else:
-        print(f"Failed to replicate user '{user['name']}': {response.text}")
+        user_data = {
+            "password_hash": user.get("password_hash"),
+            "tags": user.get("tags", "")
+        }
 
-# Function to replicate permissions for a user to the passive cluster
-def replicate_permissions(permission):
-    permission_data = {
-        "configure": permission["configure"],
-        "write": permission["write"],
-        "read": permission["read"]
-    }
-    
-    response = requests.put(
-        f"{passive_url}/permissions/{permission['vhost']}/{permission['user']}",
-        auth=auth,
-        headers={"Content-Type": "application/json"},
-        data=json.dumps(permission_data)
-    )
-    
-    if response.status_code == 204:
-        print(f"Permissions for user '{permission['user']}' in vhost '{permission['vhost']}' replicated successfully.")
+        response = requests.put(
+            f"{passive_url}/users/{user['name']}",
+            auth=auth,
+            headers={"Content-Type": "application/json"},
+            data=json.dumps(user_data),
+            verify=False
+        )
+
+        if response.status_code == 201:
+            print(f"Successfully replicated user {user['name']}")
+            return True  # Return True to indicate the user was replicated
+        else:
+            print(f"Failed to replicate user {user['name']}: {response.status_code}, {response.text}")
+            return False
+
+# Get user permissions from active cluster
+def get_user_permissions(user):
+    response = requests.get(f"{active_url}/permissions", auth=auth, verify=False)
+    if response.status_code == 200:
+        permissions = [perm for perm in response.json() if perm['user'] == user['name']]
+        return permissions
     else:
-        print(f"Failed to replicate permissions for user '{permission['user']}': {response.text}")
+        print(f"Failed to get permissions for user {user['name']}: {response.status_code}, {response.text}")
+        return []
 
-# Main function to replicate all users and their permissions
+# Replicate permissions for a user
+def replicate_permissions(user):
+    if not check_user_exists(user):
+        print(f"User {user['name']} does not exist on passive cluster. Skipping permissions replication.")
+        return
+
+    permissions = get_user_permissions(user)  # Fetch permissions from the active cluster
+    if not permissions:
+        print(f"No permissions found for user {user['name']}")
+        return
+
+    for permission in permissions:
+        vhost = permission.get("vhost")
+
+        if not check_vhost_exists(vhost):
+            print(f"Vhost {vhost} does not exist on passive cluster. Skipping permission replication.")
+            continue
+
+        permission_data = {
+            "configure": permission.get("configure", ""),
+            "write": permission.get("write", ""),
+            "read": permission.get("read", "")
+        }
+
+        response = requests.put(
+            f"{passive_url}/permissions/{vhost}/{user['name']}",
+            auth=auth,
+            headers={"Content-Type": "application/json"},
+            data=json.dumps(permission_data),
+            verify=False
+        )
+
+        if response.status_code == 201:
+            print(f"Successfully replicated permissions for user {user['name']} on vhost {vhost}")
+        else:
+            print(f"Failed to replicate permissions for user {user['name']} on vhost {vhost}: {response.status_code}, {response.text}")
+
+# Replicate users and their permissions from active to passive cluster
 def replicate_users_and_permissions():
-    # Get users and permissions from the active cluster
     users = get_users_from_active()
-    permissions = get_permissions_from_active()
+    for user in users:
+        if replicate_user(user):
+            replicate_permissions(user)  # Only replicate permissions if the user was replicated
 
-    if users and permissions:
-        # Replicate each user
-        for user in users:
-            replicate_user(user)
-
-        # Replicate permissions for each user
-        for permission in permissions:
-            replicate_permissions(permission)
-
-# Start the replication process
+# Run the replication process
 replicate_users_and_permissions()
